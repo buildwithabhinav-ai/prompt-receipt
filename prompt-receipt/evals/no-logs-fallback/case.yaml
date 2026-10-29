@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: no-logs-fallback
+expected_outcome: |
+  Without a log, the review says plainly that numbers are estimates, critiques the three quoted prompts
+  with the missing keywords, and offers a next-chat starter prompt, without fabricating exact token counts.

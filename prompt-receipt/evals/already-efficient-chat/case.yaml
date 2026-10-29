@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: already-efficient-chat
+expected_outcome: |
+  A short review that says the prompts were already specific, gives the token totals, and does not invent
+  problems. At most minor, optional tips. Does not rewrite prompts that were already good.

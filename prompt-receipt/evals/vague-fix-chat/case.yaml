@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: vague-fix-chat
+expected_outcome: |
+  A short review that reports total tokens and the prompt score, names the vague prompts ("fix",
+  "make the website better and add everything properly") as the costly ones, explains what each was
+  missing, gives a rewritten prompt using the real file names (backend/app.py, Upload.jsx), notes the
+  correction ("still not working") as rework, and credits the well-formed Upload.jsx error prompt.
