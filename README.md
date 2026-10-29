@@ -124,6 +124,7 @@ It has also been run against real chats, including a 63-prompt, 325M-token sessi
 ```text
 .
 ├── README.md
+├── LICENSE                    MIT
 ├── DESIGN.md                  design tokens and rules for this repo
 ├── assets/                    banner, example receipt, flow, palette (SVG)
 └── prompt-receipt/            <- the skill. copy this folder
@@ -142,3 +143,7 @@ The skill itemizes a bill, so the whole look is a **thermal receipt**: warm pape
 </div>
 
 Red always means **cost**, green the **fix**, amber **what was missing**. Every text pair passes WCAG AA.
+
+## License
+
+[MIT](LICENSE)
