@@ -1,68 +1,108 @@
 ---
 name: prompt-receipt
-description: End-of-chat review for vibe coders. Reads the finished Claude Code chat and reports how many tokens it used and which prompts cost the most. It names the prompts that were vague or missing keywords (no file name, no error text, no expected result, too many tasks in one message), rewrites them the better way, and estimates the tokens that would have been saved. It also gives context-hygiene tips and a ready-to-paste starter prompt for the next chat. Make sure to use this skill whenever the user says "review this chat", "chat review", "prompt receipt", "how many tokens did this use", "where did my tokens go", "how could I have prompted better", "what did I do wrong in my prompts", "token optimise", or wraps up a long build/debug session, even if they never say the word "review".
+description: Reviews a finished Claude Code chat in plain English. Shows how many tokens it used, which prompts cost the most, and what to type instead, with calm heads-ups such as "this chat got too long" or "that number is only an estimate". Use it when the user says "review this chat", "prompt receipt", "where did my tokens go", "why did that use so much", "am I hitting my limit", "why is Claude slow or expensive", "how can I prompt better", or signs off after a long build or debug session. Also offer it in one line (never run it unasked) when a chat has run very long or the user is about to start a new topic. Do not use it for help with a problem still in progress, or for patterns across many chats (that is prompt-postmortem).
 ---
 
 # Prompt Receipt
 
-Vibe coders lose most of their tokens to a few weak prompts, not to the whole chat. A one-word "fix" makes Claude explore the project to guess what is broken. An error described but not pasted gets a guess instead of a diagnosis. This skill reads the chat that just finished, finds those moments, and shows the user exactly what to type next time.
+A receipt for a chat. It shows what the chat cost, which few prompts caused most of it, and the exact words to use next time.
 
-It differs from two neighbours:
-- `explain-usage` shows where tokens went but says nothing about the prompts.
-- `prompt-postmortem` mines patterns across many sessions. This skill reviews **one chat**, right at the end, and adds the cost of each prompt and concrete rewrites. If the user wants cross-chat patterns, point them to `prompt-postmortem` after this.
+Most tokens are not spent on what you type. They are spent on Claude **re-reading the whole earlier chat on every message**. A one-word "fix" also makes Claude search the whole project to guess what you meant. This skill finds those moments and fixes them.
 
-The user may be new to coding. Plain words, short sentences, no shaming. Every criticism comes with the fix, and every review opens with what they did well.
+The reader may be new to coding. Write for them.
+
+## When to use it
+
+**Run it** when the user:
+- asks for a review of the chat, or for "prompt receipt";
+- asks where tokens or money went, or why something was slow, expensive or hit a limit;
+- asks how to prompt better, or what they did wrong;
+- signs off after a long session ("thanks, that's all", "done for today").
+
+**Offer it, do not run it**, in one line, when the chat has run very long, the user says it feels slow or costly, or they are about to start a different topic. Example: "This chat is getting long. Want a Prompt Receipt before we move on?" Ask once. If they say no, do not ask again.
+
+**Do not use it** when the user needs help with a problem right now (fix that first), or wants patterns across many chats (point them to `prompt-postmortem`).
+
+## How to write it (the plain-words rules)
+
+Everything the user reads follows these rules. They matter more than any other detail here.
+
+1. **Short sentences, everyday words.** Aim for a 13-year-old's reading level. No jargon.
+2. **Explain "token" once**, the first time: "a token is a small chunk of text Claude reads or writes. You pay for each one."
+3. **Never show internal names.** Do not print `no_target`, `cache_read`, `ctx_peak` or any flag name. Translate:
+
+   | Internal | Say this |
+   |---|---|
+   | `no_target` | "didn't say which file or page" |
+   | `problem_without_evidence` | "said it was broken but didn't paste the error" |
+   | `vague_words` | "used a word like 'properly' or 'better' without saying what it means" |
+   | `too_short` | "too short for Claude to know what to do" |
+   | `multi_task` | "asked for several things at once" |
+   | `no_expected_outcome` | "didn't say what 'done' looks like" |
+   | cache reads | "Claude re-reading the chat" |
+   | context | "how long the chat had grown" |
+
+4. **No blame.** Say what was missing, then what to type. "This one didn't say which file" and never "this was a bad prompt".
+5. **Every problem comes with its fix** in the same breath.
+6. **Be calm.** A heads-up is a heads-up, not an alarm. No capital letters, no "WARNING!".
+7. **Numbers:** round them ("about 9.7 million tokens", "about half"). Say "about" and "estimate". Never "exactly".
 
 ## Step 1: get the numbers
 
-Run the bundled analyzer. It only reads local files and sends nothing anywhere:
+Run the bundled script. It only reads files on this computer and sends nothing anywhere:
 
     python3 -I "${CLAUDE_SKILL_DIR}/scripts/analyze_chat.py" --format table
 
-(If `${CLAUDE_SKILL_DIR}` was not substituted, use the base directory shown when this skill loaded.) With no arguments it picks the newest chat of the current folder, which is the chat that is ending. Then run it again without `--format` to get the full JSON (per-prompt fields, patterns, flags).
+(If `${CLAUDE_SKILL_DIR}` was not filled in, use the folder this skill loaded from.) With no options it reviews the newest chat in the current folder. Then run it once without `--format` to get the full details as JSON, including a ready-made `warnings` list and a one-line `verdict`.
 
-- Wrong chat? `--list` shows recent chats with their first prompt; pass `--session <id>`. If the user's project lives in another folder, pass `--project-dir ~/.claude/projects/<folder>`.
-- No logs (claude.ai, Cowork, or the folder has none)? Do not stop. Review from the conversation itself: list the user's prompts, estimate tokens as characters / 4, apply the same rubric by judgment, and say clearly that every number is an estimate.
+- Wrong chat? `--list` shows recent chats. Use `--session <id>`. For another project use `--project-dir ~/.claude/projects/<folder>`.
+- No log file (claude.ai, Cowork, or none found)? Do not stop. Review from the conversation itself: list the user's prompts, estimate tokens as characters divided by 4, and say clearly at the top: "These numbers are estimates."
 
-Read [references/rubric.md](references/rubric.md) once to know what each flag means and what the numbers do and do not prove. The flags are blunt rules, so you are the judge: drop a flag that does not fit (a short "fix" right after Claude asked "should I fix it?" is fine), and say so.
+Read [references/rubric.md](references/rubric.md) once to know what the numbers do and do not prove. The script's flags are blunt rules, so you are the judge. Drop any flag that does not fit (a short "fix" right after Claude asked "should I fix it?" is fine) and say so.
 
-## Step 2: write the review
+## Step 2: write the receipt
 
-Use this order. Keep the whole thing about one to two screens; the user will not read more. [references/example-review.md](references/example-review.md) shows the tone, length and layout to aim for.
+Use exactly this order and keep the whole thing to **one or two screens**. [references/example-review.md](references/example-review.md) shows the tone and length.
 
-**1. Headline (3 lines).** Total tokens, the cost if the log has it, prompt score with letter grade, and one sentence on the biggest lesson. Example: "34 prompts, 187M tokens ($35). 17 prompts named no file or feature; they carried 65% of the cost."
+**1. Title and verdict (2 lines).** `Prompt Receipt: <N> prompts, about <X> million tokens (about $<cost> if the log has it)`, then the grade with the script's `verdict`. Example: "Grade D. Costly habits. Fixing two or three prompts will help most."
 
-**2. What you did well.** One to three real things from the chat (clear error pasted, screenshot attached, good step-by-step ordering). Skip if truly nothing; never invent praise.
+**2. Heads-up (only if the script gave warnings).** Show **at most three**, most serious first (`alert`, then `warn`, then `info`). Each is one sentence plus one thing to do. Use the script's wording, shortened if needed. Always keep the estimate note, as a small footnote at the very end instead. Examples of what to say:
+- Long chat: "This chat grew very long. Claude re-reads all of it on every message, so each one cost more. Start a new chat when you change topic."
+- Came back after a break: "Coming back after a long break made Claude re-read everything once at full price. If you don't need the old history, start fresh."
+- Review cost: "This review itself used about a third of the chat's tokens. Next time, run it in a fresh chat on the old one."
+- Secret hidden: "Something that looked like a password was hidden here. Never paste real keys into a chat."
 
-**3. Token ledger.** A small table: input, output, cache reads, peak context size. Then one plain sentence: most tokens are Claude re-reading the earlier chat on every message, so a long chat makes every later prompt more expensive. This is why context hygiene (step 5) matters more than shortening prompts.
+**3. What went well.** One or two real things (pasted the exact error, named the file, one task at a time). Skip it if there is truly nothing. Never invent praise.
 
-**4. The costliest prompts, fixed.** For the top 3 to 5 prompts by cost share (`top_cost_turns`, plus any with `led_to_correction`), show:
-- the original prompt, shortened, with its cost share;
-- what was missing, named in plain words (use the flag names as a guide);
-- the **keywords to add**, taken from [references/prompt-fixes.md](references/prompt-fixes.md) and from this user's own project (real file names, routes, component names you saw in the chat's tool calls, not generic ones);
-- a rewritten prompt they could have sent;
-- a saving estimate, labelled as an estimate: roughly how many tool calls or corrections the better prompt would likely have avoided. Base it on what happened in that turn (`tools`, `requests`, `reread_files`, whether a correction followed). Do not quote a precise percentage you cannot support.
+**4. Where the tokens went.** Two or three plain lines, not a table of jargon. Example: "About 96% was Claude re-reading the chat. Only about 1% was your typing. The biggest single prompt was #3, about 44%."
 
-Only rewrite prompts you understood from the chat. If a prompt's intent is unclear even in context, say so and skip it.
+**5. Fix these prompts.** The top three by cost (`top_cost_turns`, plus any that needed a correction). For each:
+- **Your prompt:** shortened, with its share of the cost ("about 49%").
+- **Missing:** the plain-words reason from the table above.
+- **Try this:** a rewritten prompt using the user's real file names, routes and page names from the chat, never generic ones. Templates are in [references/prompt-fixes.md](references/prompt-fixes.md).
+- **Probably avoids:** what the better prompt would likely have saved (for example "most of the 11 file reads and the follow-up"), labelled as an estimate. Never a precise percentage.
 
-**5. Habits that save the most.** Include only those the data supports:
-- **Context hygiene:** if `topic_shifts` show the user switching topic with a large context behind them, name the turns and say "start a new chat here" (or `/compact`, or `/clear`). Mention the context size at that point.
-- **Rework:** if `rework_share` is above about 10% or there were corrections, show the first-attempt prompt next to the correction and what one extra sentence would have prevented.
-- **Re-read files / tool errors:** repeated reads of the same file, or many tool errors, suggest the project's run commands or structure should live in a `CLAUDE.md`.
-- **Scope:** `multi_task` prompts. Split into one goal per message, in build order (backend, then API check, then frontend).
-- **Questions:** many tiny "done?" / "will it reset?" messages in a huge context each cost a full context re-read. Batch them or ask in a fresh chat.
-- **Model/effort:** a cheap model is enough for questions and small edits; save the strongest model for design-heavy backend and debugging. Only say this if the chat was one model throughout.
+Only rewrite prompts you understood from the chat. If one is unclear even in context, say so and skip it. A short answer to Claude's own question ("yes", "add MIT") is fine as it is: say "this one was fine" and move on.
 
-**6. Copy-paste kit.** Offer, and write on request or when it fits:
-- two or three lines for `CLAUDE.md` (stack, how to run backend and frontend, conventions) so the user stops re-explaining the project;
-- a **next-chat starter prompt**: what is finished, what is pending, key decisions, exact next task. Build it from the chat, not from guesses. This is how a 40%-done project moves on without carrying a 900k-token context.
+**6. Do this next time.** At most three habits, and only ones the data supports:
+- **New chat for a new topic** (name the turn and how long the chat had grown by then).
+- **One goal per message**, in the order you would build it.
+- **Paste the error, don't describe it.**
+- **Put how to run the project in a `CLAUDE.md` file** if the same files were opened again and again, or many steps failed.
 
-**7. Close.** Offer to save the review as `prompt-receipt-<date>.md` in the project folder. Write nothing to disk without a yes. If they save it, tell them to run this skill again after their next chat and compare the score and rework share.
+**7. Offer the next-chat starter.** Ask: "Want a paste-ready summary to start your next chat?" If yes, write it from the chat itself: what is done, what is left, key decisions, how to run it, and the one next task. Never guess.
+
+**8. Close.** "Want me to explain any line, or save this as `prompt-receipt-<date>.md`?" Write nothing to disk without a yes. If they save it, suggest running Prompt Receipt again after their next chat and comparing the grade.
+
+## Quick answers
+
+If the user only asks a small question ("how many tokens did that use?", "was that expensive?"), do not write the whole receipt. Answer in two or three lines (tokens, cost if known, the one biggest reason), add the single most important heads-up if there is one, and offer the full receipt.
 
 ## Honesty rules
 
-- Say "estimate" for per-prompt dollars: the log has one session total, which the script splits by token weight. Say "about", not "exactly".
-- Do not claim a rewritten prompt would have cost X% less. Say what it would likely have avoided.
-- A flag is a reason to look, not a verdict. Weigh the chat's real context (Claude may have just asked for the answer).
-- Never quote anything that looks like a key, password, or token; the script masks common shapes, but check what you copy.
-- If the chat was already efficient, say so. A short review is the right answer.
+- **Estimates are labelled.** The log has one cost total for the whole chat. The script shares it out by token weight, so per-prompt dollars are guesses good enough to rank prompts, not to bill.
+- **No made-up savings.** Say what a better prompt would likely have avoided, never "you'd have saved 40%".
+- **A flag is a reason to look, not a verdict.** Weigh the real situation, such as Claude having just asked for the answer.
+- **Never quote anything that looks like a key, password or token.** The script hides common shapes. Check what you copy.
+- **If the chat was already efficient, say so.** A short review is the right answer. Do not invent problems.
+- **If you are unsure, say so.** Few prompts, an unusual log, or a guessed chat all mean the grade is a rough guide.

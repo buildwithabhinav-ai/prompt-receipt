@@ -1,0 +1,8 @@
+schema_version: "1.1"
+name: long-chat-warnings
+expected_outcome: |
+  A short, plain-English receipt that opens with calm heads-ups (at most three): the chat grew very long
+  (about 524k tokens) so the user should start a new chat when the topic changes; one prompt contained a
+  key-shaped secret that is hidden and the user is told never to paste real secrets; the message after the
+  5-hour break re-read the whole chat at full price. It splits the multi-task prompt into one goal per
+  message, uses the real file names, and shows no internal flag names.

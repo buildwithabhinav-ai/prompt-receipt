@@ -25,9 +25,10 @@ Prompt Receipt reads the chat that just finished, finds those moments, and shows
 
 | | |
 |---|---|
-| **Headline** | total tokens, cost (if the log has it), a prompt score with a letter grade |
+| **Headline** | total tokens, cost (if the log has it), a grade with a one-line plain-English verdict |
+| **Heads-ups** | calm, plain warnings: "this chat got too long", "you came back after a break", "that number is an estimate" |
 | **Token ledger** | fresh input, cache writes, cache reads, output, peak context size |
-| **Costliest prompts, fixed** | each one with what it was missing and a rewrite that uses *your* file names |
+| **Costliest prompts, fixed** | each one with what it was missing, in plain words, and a rewrite that uses *your* file names |
 | **Habits that save the most** | when to start a new chat, when to use `/compact`, what belongs in `CLAUDE.md` |
 | **Next-chat starter** | a paste-ready summary so a half-finished project moves on without a huge context |
 
@@ -38,6 +39,25 @@ This is real output for the bundled `vague-fix-chat` test chat (5 prompts, 9.7M 
 <div align="center">
 <img src="assets/receipt-example.svg" alt="Sample receipt: token ledger, three costliest prompts rewritten, score D" width="720">
 </div>
+
+## When it speaks up
+
+Say any of these and it runs:
+
+> *review this chat* · *prompt receipt* · *where did my tokens go* · *why did that use so much* · *am I hitting my limit* · *how can I prompt better*
+
+It also offers a review, in one line and only once, when a chat has run very long or you are about to start a new topic. It never runs unasked, and it stays quiet while you are still stuck on a problem.
+
+Every receipt opens with at most three **heads-ups**, most serious first, each with one thing to do:
+
+| Heads-up | Plain meaning |
+|---|---|
+| Chat got very long | Claude re-reads all of it on every message. Start a new chat when the topic changes. |
+| Came back after a break | The first message back re-reads everything once at full price. Start fresh if you don't need the history. |
+| Lots of redoing | A big share of the cost went on "that didn't work". Paste the exact error next time. |
+| Key or password spotted | It is hidden in the review. Never paste real secrets into a chat. |
+| This review was costly | Run it in a fresh chat on the old one, not inside a huge chat. |
+| Numbers are estimates | One cost total per chat, shared out by token weight. |
 
 ## Install
 
@@ -109,13 +129,14 @@ Approvals like "Yes, push it", and prompts interrupted before Claude answered, a
 
 ## Tested on
 
-Three bundled test chats in [`prompt-receipt/evals`](prompt-receipt/evals), each with graders:
+Four bundled test chats in [`prompt-receipt/evals`](prompt-receipt/evals), each with graders. Every case also checks that the review is in plain words, with no internal flag names:
 
 | Case | Checks |
 |---|---|
 | `vague-fix-chat` | names the vague prompts, rewrites them with real file names, flags the correction as rework, credits the one good prompt |
 | `already-efficient-chat` | says the chat was efficient and invents no problems |
 | `no-logs-fallback` | no log available: numbers are marked as estimates, none fabricated |
+| `long-chat-warnings` | a 520k-token chat with a 5-hour break and a key in a prompt: leads with calm heads-ups, hides the key, splits the multi-task prompt |
 
 It has also been run against real chats, including a 63-prompt, 325M-token session, which is how the approval-reply and idle-time bugs were found and fixed.
 
@@ -131,7 +152,7 @@ It has also been run against real chats, including a 63-prompt, 325M-token sessi
     ├── SKILL.md               instructions Claude follows
     ├── scripts/analyze_chat.py
     ├── references/            rubric, prompt-fix templates, example review
-    └── evals/                 three test chats with graders
+    └── evals/                 four test chats with graders
 ```
 
 ## Design language
@@ -142,7 +163,7 @@ The skill itemizes a bill, so the whole look is a **thermal receipt**: warm pape
 <img src="assets/palette.svg" alt="Colour tokens: paper, receipt, ink, muted ink, stamp red, saved green, warn amber" width="100%">
 </div>
 
-Red always means **cost**, green the **fix**, amber **what was missing**. Every text pair passes WCAG AA.
+Red always means **cost**, green the **fix**, amber **what was missing** or a **heads-up**. Every text pair passes WCAG AA.
 
 ## License
 

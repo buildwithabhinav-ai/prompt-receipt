@@ -35,6 +35,27 @@
 
 Mean of prompt scores weighted by each prompt's cost share (floor 1% so cheap prompts still count). A 90+, B 80+, C 70+, D 55+, else E. It rates prompt quality in this chat only. It is not a rating of the person.
 
+## Heads-ups (the `warnings` list)
+
+The script writes these in plain words so Claude can pass them on. Level `alert` is most serious, then `warn`, then `info`. Show at most three, most serious first.
+
+| code | level | fires when | what the user should do |
+|---|---|---|---|
+| `long_chat` | warn, alert at 500k | the chat's longest context reached 200,000 tokens | start a new chat when the topic changes |
+| `review_cost` | warn | the review itself used 15% or more of the chat | run it next time in a fresh chat with `--session <id>` |
+| `came_back_after_break` | info | a message came after a break of an hour or more and re-wrote 50,000+ tokens | start fresh if the old history is not needed |
+| `rework` | warn | 20% or more of the cost went on redoing work after "that didn't work" | paste the exact error and say what was expected |
+| `tool_errors` | info | 5 or more of Claude's steps failed | put run commands in `CLAUDE.md` |
+| `secrets` | warn | a prompt contained something shaped like a key or password (hidden in the output) | never paste real secrets into a chat |
+| `few_prompts` | info | fewer than 3 prompts | treat the grade as a rough guide |
+| `no_cost` | info | the log has no cost counter | numbers are tokens only |
+| `estimate` | info | the log has a cost counter | per-prompt dollars are estimates |
+| `picked_chat` | info | no `--session` was given, so the newest chat was used | use `--list` if it was the wrong one |
+
+The "came back after a break" warning exists because Claude keeps a short-lived copy of the chat so it does not have to pay full price to re-read it. After a long break that copy is gone, so the first message back re-reads everything once at full price.
+
+A plain "No", "Not yet" or "No thanks" is an answer to Claude's question, not a complaint, so it is never counted as rework.
+
 ## Known blind spots
 
 - A short prompt can be right when it answers Claude's last question.

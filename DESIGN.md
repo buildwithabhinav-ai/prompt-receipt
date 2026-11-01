@@ -19,10 +19,10 @@ Warm neutrals plus three signal colours. Every text pair below passes WCAG AA (4
 | `ink-muted` | `#5F594D` | `#B5AD9C` | captions, labels | 6.2:1 / 8.3:1 |
 | `stamp` | `#B8321B` | `#FF7A5C` | cost share, grade stamp, kicker | 5.3:1 / 7.2:1 |
 | `saved` | `#1B7048` | `#5FD29A` | "better prompt", rewrites | 5.4:1 / 9.9:1 |
-| `warn` | `#8F5A0A` | `#E8B04A` | "what was missing" | 5.1:1 / 9.5:1 |
+| `warn` | `#8F5A0A` | `#E8B04A` | "what was missing", heads-ups | 5.1:1 / 9.5:1 |
 
 Rules
-- Red means **cost**. Green means **the fix**. Amber means **what was missing**. Never swap them.
+- Red means **cost**. Green means **the fix**. Amber means **what was missing, or a heads-up**. Never swap them.
 - Max one red element per region. The stamp is the loudest thing on a page.
 - Assets ship with their own paper background, so they read the same in GitHub light and dark mode.
 

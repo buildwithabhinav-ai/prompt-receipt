@@ -63,6 +63,8 @@ CORRECTION_RE = re.compile(
     r"it'?s still|it is still|didn'?t work|doesn'?t work|not working|but (?:it|the|now))|"
     r"\b(still (?:not|getting|showing|failing|the same)|same error|not fixed|didn'?t (?:fix|work)|"
     r"not resolved|still not)\b", re.I)
+# "No", "Not yet", "no thanks" answer a question Claude asked. They are not "that did not work" complaints.
+ANSWER_NO_RE = re.compile(r"^(no|nope|nah|not (yet|now)|no,? thanks|never mind)\b[^a-z0-9]*(keep it \w+|for now|later)?[^a-z0-9]*$", re.I)
 APPROVAL_RE = re.compile(
     r"^(yes|yeah|yep|yup|ok|okay|sure|go ahead|go on|proceed|approved?|do it|sounds good|please do|continue)\b", re.I)
 PHASES = [
@@ -181,7 +183,7 @@ def command_name(row):
 
 def new_turn(n, text, img, ts, command=False):
     return {"n": n, "text": text, "has_image": img, "start": ts, "end": ts, "last": ts, "active": 0.0,
-            "command": command, "reqs": {}, "tools": Counter(), "tool_ids": set(), "tool_errors": 0,
+            "command": command, "gap_before": 0.0, "reqs": {}, "tools": Counter(), "tool_ids": set(), "tool_errors": 0,
             "reads": Counter(), "interrupted": False, "sidechain_reqs": 0}
 
 
@@ -198,9 +200,14 @@ def parse_session(path):
     rows = load(path)
     turns, cur = [], None
     cost_state, meta = None, {}
+    last_ts = None
     for r in rows:
         t = r.get("type")
         ts = parse_ts(r.get("timestamp", "")) if r.get("timestamp") else None
+        gap = 0.0                      # seconds of silence before this row (a break in the chat)
+        if ts and t in ("user", "assistant"):
+            gap = (ts - last_ts).total_seconds() if last_ts else 0.0
+            last_ts = ts
         for k in ("sessionId", "cwd", "version", "entrypoint", "gitBranch"):
             if r.get(k) and k not in meta:
                 meta[k] = r[k]
@@ -211,6 +218,7 @@ def parse_session(path):
             cmd = command_name(r)
             if cmd:       # a slash command starts its own turn, so its cost is not charged to the prompt before it
                 cur = new_turn(len(turns) + 1, cmd, False, ts, command=True)
+                cur["gap_before"] = gap
                 turns.append(cur)
                 continue
             h = human_text(r)
@@ -220,6 +228,7 @@ def parse_session(path):
                     cur["has_image"] = True
                     continue
                 cur = new_turn(len(turns) + 1, text, img, ts)
+                cur["gap_before"] = gap
                 turns.append(cur)
                 continue
             if cur is None:
@@ -319,7 +328,70 @@ def units(r):
     return (r["in"] * W_IN + r["cw"] * W_CACHE_WRITE + r["cr"] * W_CACHE_READ + r["out"] * W_OUT)
 
 
-def analyze(path, top_n):
+VERDICTS = {
+    "A": "Clear prompts. Very little to fix.",
+    "B": "Good prompts. A few easy wins.",
+    "C": "Okay. Some prompts cost more than they needed to.",
+    "D": "Costly habits. Fixing two or three prompts will help most.",
+    "E": "Most prompts were too vague. Start with the first fix below.",
+}
+LEVEL_RANK = {"alert": 0, "warn": 1, "info": 2}
+
+
+def ago(minutes):
+    h = minutes / 60
+    return f"{h / 24:.0f}-day" if h >= 48 else f"{h:.0f}-hour"
+
+
+def build_warnings(res, auto_picked):
+    """Plain-language heads-ups for the user. Each is {level, code, message}; level is alert, warn or info."""
+    t, p = res["totals"], res["patterns"]
+    out = []
+
+    def add(level, code, msg):
+        out.append({"level": level, "code": code, "message": msg})
+
+    k = lambda n: f"{round(n / 1000):,}k"
+    if t["context_peak"] >= 200_000:
+        add("alert" if t["context_peak"] >= 500_000 else "warn", "long_chat",
+            f"This chat grew to {k(t['context_peak'])} tokens. Claude re-reads all of it on every message, "
+            "so each new message gets more expensive. Start a new chat when you change topic.")
+    if t["commands"] and t["command_cost_share"] >= 0.15:
+        add("warn", "review_cost",
+            f"Running this review inside the chat used about {t['command_cost_share']:.0%} of its tokens. "
+            "Next time, open a fresh chat and review the old one with --session <id>.")
+    shown = 0
+    for x in res["turns"][1:]:
+        if x["break_before_min"] >= 60 and x["cache_write"] >= 50_000 and shown < 2:
+            what = x["prompt"] if x["kind"] == "command" else f'"{x["prompt"][:30].strip()}"'
+            add("info", "came_back_after_break",
+                f"{what} came after a {ago(x['break_before_min'])} break. Claude had to re-read {k(x['cache_write'])} "
+                "tokens at full price. Coming back to an old chat costs extra once; start fresh if you do not need the history.")
+            shown += 1
+    if p["rework_share"] >= 0.2:
+        add("warn", "rework",
+            f"About {p['rework_share']:.0%} of the cost went on redoing work after something did not work. "
+            "Next time paste the exact error and say what you expected.")
+    if p["tool_errors"] >= 5:
+        add("info", "tool_errors",
+            f"{p['tool_errors']} of Claude's steps failed. Putting your run commands in a CLAUDE.md file usually prevents this.")
+    if p["secrets_masked"]:
+        add("warn", "secrets",
+            "Something in your prompts looked like a password or key, so it is hidden in this review. "
+            "Never paste real secrets into a chat.")
+    if t["prompts"] < 3:
+        add("info", "few_prompts", f"Only {t['prompts']} prompt(s), too few to see a pattern. Treat the score as a rough guide.")
+    if t["cost_usd"] is None:
+        add("info", "no_cost", "This log has no cost counter, so you see tokens only, not dollars.")
+    else:
+        add("info", "estimate", "Dollar amounts per prompt are estimates: the log keeps one total for the chat, shared out by token weight.")
+    if auto_picked:
+        add("info", "picked_chat",
+            f"Reviewed the newest chat in this folder ({res['session']['id'][:8]}). Not the right one? Run with --list to pick another.")
+    return sorted(out, key=lambda w: LEVEL_RANK[w["level"]])
+
+
+def analyze(path, top_n, auto_picked=False):
     turns, cost_state, meta = parse_session(path)
     if not any(not t["command"] for t in turns):
         sys.exit("That chat has no typed prompts to review.")
@@ -356,6 +428,7 @@ def analyze(path, top_n):
             "thinking": tthink, "units": round(u), "ctx_peak": max(ctx) if ctx else 0,
             "tools": dict(t["tools"]), "tool_errors": t["tool_errors"],
             "interrupted": t["interrupted"], "topic_shift": shift, "seconds": secs,
+            "break_before_min": round(t["gap_before"] / 60),
             "reread_files": [{"file": p, "touches": c} for p, c in reads],
             "models": sorted({r["model"] for r in reqs if r["model"]}),
         })
@@ -363,7 +436,8 @@ def analyze(path, top_n):
     for i, t in enumerate(out_turns):
         t["share"] = t["units"] / total_units if total_units else 0
         t["led_to_correction"] = False
-        t["is_correction"] = i > 0 and t["kind"] != "command" and bool(CORRECTION_RE.search(t["prompt"][:200]))
+        t["is_correction"] = (i > 0 and t["kind"] != "command" and bool(CORRECTION_RE.search(t["prompt"][:200]))
+                              and not ANSWER_NO_RE.match(t["prompt"].strip()))
         if t["is_correction"]:
             out_turns[i - 1]["led_to_correction"] = True
     # rework = the "that didn't work" turns plus the turns they were correcting
@@ -394,7 +468,9 @@ def analyze(path, top_n):
     active = sum(t["active"] for t in turns)
     top = sorted((t for t in out_turns if t["kind"] != "command"), key=lambda t: t["units"], reverse=True)[:top_n]
     commands = [t for t in out_turns if t["kind"] == "command"]
-    return {
+    masked = sum(1 for t in turns if SECRET_RE.search(t["text"]))
+    grade = None if overall is None else "A" if overall >= 90 else "B" if overall >= 80 else "C" if overall >= 70 else "D" if overall >= 55 else "E"
+    res = {
         "session": {"id": meta.get("sessionId"), "path": str(path), "cwd": meta.get("cwd"),
                     "version": meta.get("version"), "entrypoint": meta.get("entrypoint"),
                     "start": first.isoformat() if first else None,
@@ -407,8 +483,8 @@ def analyze(path, top_n):
                    "all_tokens": all_tok, "cache_read_share": round(sums["cache_read"] / all_tok, 3) if all_tok else 0,
                    "context_peak": ctx_peak, "cost_usd": round(cost, 2) if cost is not None else None,
                    "cost_note": "from the chat's own cost counter" if cost is not None else "no cost counter in log; tokens only"},
-        "score": {"overall": overall,
-                  "grade": None if overall is None else "A" if overall >= 90 else "B" if overall >= 80 else "C" if overall >= 70 else "D" if overall >= 55 else "E",
+        "score": {"overall": overall, "grade": grade,
+                  "verdict": VERDICTS.get(grade, "Not enough prompts to give a grade."),
                   "note": "weighted by each prompt's share of cost; see references/rubric.md"},
         "patterns": {
             "flag_counts": dict(fc),
@@ -419,6 +495,7 @@ def analyze(path, top_n):
                              for i, t in enumerate(out_turns) if t["topic_shift"]],
             "files_touched_3plus": [{"file": p, "touches": c} for p, c in allreads.most_common(8) if c >= 3],
             "tool_errors": sum(t["tool_errors"] for t in out_turns),
+            "secrets_masked": masked,
             "interrupted_turns": [t["n"] for t in out_turns if t["interrupted"]],
             "phases": dict(Counter(t["phase"] for t in out_turns)),
             "median_prompt_words": statistics.median([t["words"] for t in out_turns if t["kind"] not in ("reply", "command")] or [0]),
@@ -426,6 +503,8 @@ def analyze(path, top_n):
         "top_cost_turns": [t["n"] for t in top],
         "turns": out_turns,
     }
+    res["warnings"] = build_warnings(res, auto_picked)
+    return res
 
 
 def list_logs(project_dir, limit):
@@ -453,7 +532,11 @@ def print_table(res):
           f"(cache-read {t['cache_read_share']:.0%}) | output {t['out']:,} | peak context {t['context_peak']:,} | "
           f"cost {'n/a' if t['cost_usd'] is None else '$' + str(t['cost_usd'])}")
     print(f"Prompt score {res['score']['overall']} ({res['score']['grade']}) | "
-          f"corrections {res['patterns']['corrections']} | rework {res['patterns']['rework_share']:.0%} of cost\n")
+          f"corrections {res['patterns']['corrections']} | rework {res['patterns']['rework_share']:.0%} of cost")
+    print(f"Verdict: {res['score']['verdict']}")
+    for w in res["warnings"]:
+        print(f"  [{w['level'].upper()}] {w['message']}")
+    print()
     print(f"{'#':>3} {'share':>6} {'ctx':>8} {'score':>5}  {'kind':<8} {'flags':<40} prompt")
     for x in res["turns"]:
         sc = "-" if x["score"] is None else x["score"]
@@ -473,7 +556,7 @@ def main():
     a = ap.parse_args()
     if a.list:
         return list_logs(a.project_dir, a.limit)
-    res = analyze(resolve_session(a.session, a.project_dir), a.top)
+    res = analyze(resolve_session(a.session, a.project_dir), a.top, auto_picked=not a.session)
     if a.format == "table":
         print_table(res)
     else:
