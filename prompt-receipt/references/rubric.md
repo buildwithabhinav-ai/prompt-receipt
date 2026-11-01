@@ -14,6 +14,7 @@
 - `question`: asks something. Not penalised for missing files or outcomes.
 - `reply`: three words or fewer with no action verb ("yes", "done"), or a prompt that opens with an approval ("Yes, push it", "ok, go ahead"). Claude already proposed the task, so there is nothing to name. Not scored.
 - Unscored too: a prompt that was interrupted before Claude answered (usually re-sent right after).
+- `command`: a slash command you typed, such as `/prompt-receipt` or `/compact`. It gets its own line so its cost is not charged to the prompt before it (a review run at the end of a chat is real cost, and after a long break it also re-writes the whole cached context). It is counted in the totals, shown as `command_cost_share`, and never scored or ranked. Tell the user how much the review itself cost.
 - `action`: everything else. Scored.
 
 ## Flags (each subtracts from 100)
@@ -41,4 +42,4 @@ Mean of prompt scores weighted by each prompt's cost share (floor 1% so cheap pr
 - Topic shifts use word overlap; a deliberate follow-up in different words can look like a shift.
 - Rework detection catches only corrections that start with the usual phrases; a calm rewording is missed.
 - Sub-agent work may be counted in the turn that started it.
-- `active_minutes` adds up time inside turns; `wall_minutes` is first prompt to last reply and includes idle days. Quote active time.
+- `active_minutes` adds up time inside turns; `wall_minutes` is first prompt to last reply and includes idle days. Quote active time. Active time caps any pause between two log rows at 10 minutes, so days away from the chat do not count.

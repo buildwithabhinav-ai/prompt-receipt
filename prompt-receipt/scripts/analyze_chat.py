@@ -164,10 +164,34 @@ def parse_ts(s):
         return None
 
 
-def new_turn(n, text, img, ts):
-    return {"n": n, "text": text, "has_image": img, "start": ts, "end": ts,
-            "reqs": {}, "tools": Counter(), "tool_ids": set(), "tool_errors": 0,
+COMMAND_RE = re.compile(r"<command-name>\s*(/?[^<\s]+)\s*</command-name>")
+IDLE_CAP = 600      # seconds: a longer pause between two log rows counts as 10 minutes
+
+
+def command_name(row):
+    """Return '/name' if this user row is a slash command typed by the user (e.g. /prompt-receipt)."""
+    if row.get("type") != "user" or row.get("isMeta") or row.get("isSidechain"):
+        return None
+    c = row.get("message", {}).get("content")
+    if isinstance(c, list):
+        c = "\n".join(b.get("text", "") for b in c if b.get("type") == "text")
+    m = COMMAND_RE.search(c) if isinstance(c, str) else None
+    return m.group(1) if m else None
+
+
+def new_turn(n, text, img, ts, command=False):
+    return {"n": n, "text": text, "has_image": img, "start": ts, "end": ts, "last": ts, "active": 0.0,
+            "command": command, "reqs": {}, "tools": Counter(), "tool_ids": set(), "tool_errors": 0,
             "reads": Counter(), "interrupted": False, "sidechain_reqs": 0}
+
+
+def tick(turn, ts):
+    """Mark the chat as active at ts, without counting long idle gaps."""
+    if not ts:
+        return
+    if turn["last"]:
+        turn["active"] += min((ts - turn["last"]).total_seconds(), IDLE_CAP)
+    turn["last"] = turn["end"] = ts
 
 
 def parse_session(path):
@@ -184,6 +208,11 @@ def parse_session(path):
             cost_state = r
             continue
         if t == "user":
+            cmd = command_name(r)
+            if cmd:       # a slash command starts its own turn, so its cost is not charged to the prompt before it
+                cur = new_turn(len(turns) + 1, cmd, False, ts, command=True)
+                turns.append(cur)
+                continue
             h = human_text(r)
             if h is not None:
                 text, img = h
@@ -206,8 +235,7 @@ def parse_session(path):
                         cur["interrupted"] = True
                 if r.get("isMeta") and any(b.get("type") == "image" for b in c):
                     cur["has_image"] = True
-            if ts:
-                cur["end"] = ts
+            tick(cur, ts)
         elif t == "assistant" and cur is not None:
             m = r.get("message", {})
             u = m.get("usage") or {}
@@ -231,8 +259,7 @@ def parse_session(path):
                     inp = b.get("input") or {}
                     if b.get("name") in ("Read", "Edit", "Write") and inp.get("file_path"):
                         cur["reads"][inp["file_path"]] += 1
-            if ts:
-                cur["end"] = ts
+            tick(cur, ts)
     return turns, cost_state, meta
 
 
@@ -294,7 +321,7 @@ def units(r):
 
 def analyze(path, top_n):
     turns, cost_state, meta = parse_session(path)
-    if not turns:
+    if not any(not t["command"] for t in turns):
         sys.exit("That chat has no typed prompts to review.")
     total_units = 0.0
     out_turns = []
@@ -311,11 +338,15 @@ def analyze(path, top_n):
         flags, score = flag_prompt(t["text"], kind, t["has_image"])
         if not reqs and t["interrupted"]:     # stopped before Claude answered, usually re-sent; nothing to judge
             flags, score = [], None
-        words = content_words(t["text"])
-        recent = set().union(*prev_words[-3:]) if prev_words else set()
-        shift = bool(prev_words and len(words) >= 5 and len(words & recent) / max(len(words | recent), 1) < 0.04)
-        prev_words.append(words)
-        secs = (t["end"] - t["start"]).total_seconds() if t["start"] and t["end"] else None
+        shift = False
+        if t["command"]:                      # /prompt-receipt, /compact ...: counted in cost, never judged
+            kind, phase, flags, score = "command", "other", [], None
+        else:
+            words = content_words(t["text"])
+            recent = set().union(*prev_words[-3:]) if prev_words else set()
+            shift = bool(prev_words and len(words) >= 5 and len(words & recent) / max(len(words | recent), 1) < 0.04)
+            prev_words.append(words)
+        secs = round(t["active"])
         reads = [(p, c) for p, c in t["reads"].items() if c >= 3]
         out_turns.append({
             "n": t["n"], "kind": kind, "phase": phase,
@@ -332,7 +363,7 @@ def analyze(path, top_n):
     for i, t in enumerate(out_turns):
         t["share"] = t["units"] / total_units if total_units else 0
         t["led_to_correction"] = False
-        t["is_correction"] = i > 0 and bool(CORRECTION_RE.search(t["prompt"][:200]))
+        t["is_correction"] = i > 0 and t["kind"] != "command" and bool(CORRECTION_RE.search(t["prompt"][:200]))
         if t["is_correction"]:
             out_turns[i - 1]["led_to_correction"] = True
     # rework = the "that didn't work" turns plus the turns they were correcting
@@ -360,8 +391,9 @@ def analyze(path, top_n):
     first, last = turns[0]["start"], turns[-1]["end"]
     models = Counter(m for t in out_turns for m in t["models"] if not m.startswith("<"))
     # active time: time spent inside turns, so overnight gaps between prompts are not counted
-    active = sum((t["end"] - t["start"]).total_seconds() for t in turns if t["start"] and t["end"])
-    top = sorted(out_turns, key=lambda t: t["units"], reverse=True)[:top_n]
+    active = sum(t["active"] for t in turns)
+    top = sorted((t for t in out_turns if t["kind"] != "command"), key=lambda t: t["units"], reverse=True)[:top_n]
+    commands = [t for t in out_turns if t["kind"] == "command"]
     return {
         "session": {"id": meta.get("sessionId"), "path": str(path), "cwd": meta.get("cwd"),
                     "version": meta.get("version"), "entrypoint": meta.get("entrypoint"),
@@ -369,7 +401,9 @@ def analyze(path, top_n):
                     "wall_minutes": round((last - first).total_seconds() / 60) if first and last else None,
                     "active_minutes": round(active / 60),
                     "models": dict(models)},
-        "totals": {"prompts": len(out_turns), "requests": sums["requests"], **{k: sums[k] for k in ("in", "cache_write", "cache_read", "out", "thinking")},
+        "totals": {"prompts": len(out_turns) - len(commands), "commands": len(commands),
+                   "command_cost_share": round(sum(t["share"] for t in commands), 3),
+                   "requests": sums["requests"], **{k: sums[k] for k in ("in", "cache_write", "cache_read", "out", "thinking")},
                    "all_tokens": all_tok, "cache_read_share": round(sums["cache_read"] / all_tok, 3) if all_tok else 0,
                    "context_peak": ctx_peak, "cost_usd": round(cost, 2) if cost is not None else None,
                    "cost_note": "from the chat's own cost counter" if cost is not None else "no cost counter in log; tokens only"},
@@ -387,7 +421,7 @@ def analyze(path, top_n):
             "tool_errors": sum(t["tool_errors"] for t in out_turns),
             "interrupted_turns": [t["n"] for t in out_turns if t["interrupted"]],
             "phases": dict(Counter(t["phase"] for t in out_turns)),
-            "median_prompt_words": statistics.median([t["words"] for t in out_turns if t["kind"] != "reply"] or [0]),
+            "median_prompt_words": statistics.median([t["words"] for t in out_turns if t["kind"] not in ("reply", "command")] or [0]),
         },
         "top_cost_turns": [t["n"] for t in top],
         "turns": out_turns,
